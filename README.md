@@ -1,1 +1,2 @@
-# LTL-CORE
+# ltl_automaton_core
+
