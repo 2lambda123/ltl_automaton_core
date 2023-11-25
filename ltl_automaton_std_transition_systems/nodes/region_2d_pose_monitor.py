@@ -5,7 +5,7 @@ from rospy.msg import AnyMsg
 from geometry_msgs.msg import Pose, PoseWithCovarianceStamped, PoseWithCovariance, PoseStamped
 from std_msgs.msg import String
 from roslib.message import get_message_class
-from tf.transformations import euler_from_quaternion
+from tf.transformations import euler_from_quaternion, quaternion_from_euler, quaternion_multiply
 # For function "import_ts_from_file"
 from ltl_automaton_planner.ltl_automaton_utilities import import_ts_from_file
 from ltl_automaton_msgs.srv import ClosestState, ClosestStateResponse
@@ -18,7 +18,9 @@ class Region2DPoseStateMonitor(object):
     def __init__(self):
         self.state = None
         self.curr_pose = None
+        self.station_access_request = ""
 
+        # Get parameters from ROS server
         self.init_params()
 
         # Setup pose callback
@@ -32,11 +34,11 @@ class Region2DPoseStateMonitor(object):
         self.region_dict = import_ts_from_file(rospy.get_param('transition_system_textfile'))['state_models']['2d_pose_region']
 
         # Generate list of station regions
-        self.stations = filter(lambda elem: self.region_dict["nodes"][elem]["attr"]["type"] == "station",
-                               self.region_dict["nodes"].keys())
+        self.stations = list(filter(lambda elem: self.region_dict["nodes"][elem]["attr"]["type"] == "station",
+                               self.region_dict["nodes"].keys()))
         # Generate list of square regions
-        self.squares = filter(lambda elem: self.region_dict["nodes"][elem]["attr"]["type"] == "square",
-                              self.region_dict["nodes"].keys())
+        self.squares = list(filter(lambda elem: self.region_dict["nodes"][elem]["attr"]["type"] == "square",
+                              self.region_dict["nodes"].keys()))
 
     #----------------------------------------
     # Setup subscriber to agent localization
@@ -44,6 +46,9 @@ class Region2DPoseStateMonitor(object):
     def setup_pub_sub(self):
         # Subscribe to topic with any message so that callback can process any type of pose message
         pose_sub = rospy.Subscriber("agent_2d_region_pose", AnyMsg, self.omnipose_callback)
+
+        # Subscribe to topic of agent requesting station access
+        station_request_sub = rospy.Subscriber("station_access_request", String, self.station_request_callback)
 
         # Publisher of current region
         self.current_region_pub = rospy.Publisher("current_region", String, latch=True, queue_size=10)
@@ -55,15 +60,20 @@ class Region2DPoseStateMonitor(object):
     # Check agent region using pose and update current region if needed
     #-------------------------------------------------------------------
     def check_curr_region(self, pose):
+        #print("Received pose, current region is")
+        #print(self.state)
+        #print("Station request is")
+        #print(self.station_access_request)
         # If current region is known, 
         if self.state:
             # If current region is a station, we check that agent has left first
             #--------------------------------------------------------------------
-            # Check if current region was left (using hysteresis)
+            # Check if current region was left (using hysteresis) or consider that agent has left if station access request is back to empty
             if (self.region_dict["nodes"][self.state]["attr"]["type"] == "station"):
-                agent_has_left = not self.is_in_station(pose, self.state,
+                agent_has_left = (not self.is_in_station(pose, self.state,
                                                               self.region_dict["nodes"][self.state]["attr"]["dist_hysteresis"],
                                                               self.region_dict["nodes"][self.state]["attr"]["angle_hysteresis"])
+                                  or not (self.station_access_request == self.state))
 
                 # If agent has left current regions, check all connected regions
                 if not agent_has_left:
@@ -78,8 +88,8 @@ class Region2DPoseStateMonitor(object):
             # stations are overlaid on top of squares and should be check even if agent has not left square
             else:
                 # Get list of connected station and check if in it
-                connected_stations_list = filter(lambda elem: elem in self.stations,
-                                                 self.region_dict["nodes"][self.state]["connected_to"].keys())
+                connected_stations_list = list(filter(lambda elem: elem in self.stations,
+                                                 self.region_dict["nodes"][self.state]["connected_to"].keys()))
                 # Check if agent is in the stations
                 if self.update_state(pose, connected_stations_list):
                     return True
@@ -92,21 +102,23 @@ class Region2DPoseStateMonitor(object):
                     return True
                 else:
                     # Check all connected squares
-                    connected_stations_list = filter(lambda elem: elem in self.squares,
-                                                     self.region_dict["nodes"][self.state]["connected_to"].keys())
+                    connected_square_list = list(filter(lambda elem: elem in self.squares,
+                                                     self.region_dict["nodes"][self.state]["connected_to"].keys()))
+                    #print("Connected cell list is ")
+                    #print(connected_square_list)
 
-                    if self.update_state(pose, self.region_dict["nodes"][self.state]["connected_to"].keys()):
+                    if self.update_state(pose, connected_square_list):
                         return True
 
 
         # If not found in connected regions or no previous region, check all regions
-        #print "previous state does not exist or agent not in connected regions"
+        #print("previous state does not exist or agent not in connected regions")
         if self.update_state(pose, self.region_dict["nodes"].keys()):
             return True
 
         # Return false if region could not be found from pose
         return False
-        #print "agent not found"
+        #print("agent not found")
 
     #----------------------------
     # Check agent closest region
@@ -118,41 +130,43 @@ class Region2DPoseStateMonitor(object):
             prev_dist = float('inf')
             closest_region = None
             for reg in self.region_dict["nodes"][self.state]["connected_to"].keys():
-                dist = float('inf')
-                # If region is a station
-                if (self.region_dict["nodes"][reg]["attr"]["type"] == "station"):
-                    station_pose = self.region_dict["nodes"][reg]["attr"]["pose"]
-                    station_radius = self.region_dict["nodes"][reg]["attr"]["radius"]
-                    dist = self.dist_2d_err(pose, station_pose) - station_radius
+                # Check only if not current region (ignore self-loop)
+                if not (reg == self.state):
+                    dist = float('inf')
+                    # If region is a station
+                    if (self.region_dict["nodes"][reg]["attr"]["type"] == "station"):
+                        station_pose = self.region_dict["nodes"][reg]["attr"]["pose"]
+                        station_radius = self.region_dict["nodes"][reg]["attr"]["radius"]
+                        dist = self.dist_2d_err(pose, station_pose) - station_radius
 
-                # If region is a square
-                else:
-                    square_pose = self.region_dict["nodes"][reg]["attr"]["pose"]
-                    square_side_length = self.region_dict["nodes"][reg]["attr"]["length"]
-
-                    dist_x = square_pose[0][0] - pose.position.x
-                    dist_y = square_pose[0][1] - pose.position.y
-
-                    # If agent X-coordinate is already in square boundaries
-                    if ((float)(-square_side_length)/2 < dist_x < (float)(square_side_length)/2):
-                        dist_x = 0.0
-                    # Else, remove square half side length to distance
+                    # If region is a square
                     else:
-                        dist_x = abs(dist_x) - (float)(square_side_length)/2
+                        square_pose = self.region_dict["nodes"][reg]["attr"]["pose"]
+                        square_side_length = self.region_dict["nodes"][reg]["attr"]["length"]
 
-                    # If agent Y-coordinate is already in square boundaries
-                    if ((float)(-square_side_length)/2 < dist_y < (float)(square_side_length)/2):
-                        dist_y = 0.0
-                    # Else, remove square half side length to distance
-                    else:
-                        dist_y = abs(dist_y) - (float)(square_side_length)/2
+                        dist_x = square_pose[0][0] - pose.position.x
+                        dist_y = square_pose[0][1] - pose.position.y
 
-                    dist = math.sqrt((dist_x)**2 + (dist_y)**2)
+                        # If agent X-coordinate is already in square boundaries
+                        if ((float)(-square_side_length)/2 < dist_x < (float)(square_side_length)/2):
+                            dist_x = 0.0
+                        # Else, remove square half side length to distance
+                        else:
+                            dist_x = abs(dist_x) - (float)(square_side_length)/2
 
-                # If shorter than distance to previously tested region, keep
-                if (dist < prev_dist):
-                    prev_dist = dist
-                    closest_region = str(reg)
+                        # If agent Y-coordinate is already in square boundaries
+                        if ((float)(-square_side_length)/2 < dist_y < (float)(square_side_length)/2):
+                            dist_y = 0.0
+                        # Else, remove square half side length to distance
+                        else:
+                            dist_y = abs(dist_y) - (float)(square_side_length)/2
+
+                        dist = math.sqrt((dist_x)**2 + (dist_y)**2)
+
+                    # If shorter than distance to previously tested region, keep
+                    if (dist < prev_dist):
+                        prev_dist = dist
+                        closest_region = str(reg)
 
         if self.state and closest_region:
             return closest_region, prev_dist
@@ -169,7 +183,8 @@ class Region2DPoseStateMonitor(object):
         # Check stations first
         for reg in region_keys:
             if reg in self.stations:
-                if self.is_in_station(pose, reg):
+                # Check if agent is in station and requesting the said station access
+                if self.is_in_station(pose, reg) and (self.station_access_request == str(reg)):
                     self.state = str(reg)
                     self.current_region_pub.publish(self.state)
                     return True
@@ -204,12 +219,12 @@ class Region2DPoseStateMonitor(object):
     #-------------------------------------
     # Check if pose is in a given station
     #-------------------------------------
-    # station dict format: {connected_to: {}, attr: {type, pose, radius, angle_threshold, dist_hysteresis, angle_hysteresis}}
+    # station dict format: {connected_to: {}, attr: {type, pose, radius, angle_tolerance, dist_hysteresis, angle_hysteresis}}
     # Station is a disk, with orientation being checked as well
     def is_in_station(self, pose, station, dist_hysteresis = 0, angle_hysteresis = 0):
         station_pose = self.region_dict["nodes"][station]["attr"]["pose"]
         station_radius = self.region_dict["nodes"][station]["attr"]["radius"]
-        angle_threshold = self.region_dict["nodes"][station]["attr"]["angle_threshold"]
+        angle_tolerance = self.region_dict["nodes"][station]["attr"]["angle_threshold"]
 
         dist = self.dist_2d_err(pose, station_pose)
         angle = self.yaw_angle_err(pose, station_pose)
@@ -218,7 +233,7 @@ class Region2DPoseStateMonitor(object):
 
         # If distance is inferior to radius plus hysteresis,
         # or if angle is inferior to threshold plus hysteresis, agent is in of region
-        if (dist < station_radius + dist_hysteresis) and (angle < angle_threshold + angle_hysteresis):
+        if (dist < station_radius + dist_hysteresis) and (angle < angle_tolerance + angle_hysteresis):
             #print "True"
             return True
         else:
@@ -239,20 +254,37 @@ class Region2DPoseStateMonitor(object):
     #  Compute angle diff (in rad)
     # between a pose and a pose msg
     #-------------------------------
-    # Pose format [[x,y], [phi]]
+    # Center pose format [[x,y], [phi]]
     # Pose msg is ROS geometry_msgs/Pose
-    def yaw_angle_err(self, pose, center_pose):
-        # Get euler angle from pose quaternion
-        (roll, pitch, yaw) = euler_from_quaternion([pose.orientation.x,
-                                                    pose.orientation.y,
-                                                    pose.orientation.z,
-                                                    pose.orientation.w])
-        return abs(yaw - center_pose[1][0])
+    def yaw_angle_err(self, pose_msg, center_pose):
+        # Create quaternion from center pose yaw angle
+        center_pose_quat = quaternion_from_euler(0, 0, center_pose[1][0])
 
-    #-------------------------------------
-    #        callback function for
-    #      the pose of each obstacle
-    #-------------------------------------
+        # Create inversion quaternion of pose_msg for computing error
+        pose_quat_inv = [pose_msg.orientation.x,
+                         pose_msg.orientation.y,
+                         pose_msg.orientation.z,
+                         -pose_msg.orientation.w]
+
+        # Multiply quaternion by inversed quaternion to get quaternion error (difference)
+        error_quat = quaternion_multiply(center_pose_quat, pose_quat_inv)
+        # Extract yaw error
+        (roll, pitch, yaw) = euler_from_quaternion(error_quat)
+
+        return abs(yaw)
+
+
+    #------------------------------
+    # Callback function for saving
+    # agent station access request
+    #------------------------------
+    def station_request_callback(self, msg):
+        self.station_access_request = msg.data
+
+    #--------------------------------------
+    # Callback function for the agent pose
+    # Can handle any type of pose message
+    #--------------------------------------
     def omnipose_callback(self, anymsg):
         # Callback is allowed to subscribe with any message, so it can subscribe to 
         # both Pose and PoseWithCovarianceStamped message types.
