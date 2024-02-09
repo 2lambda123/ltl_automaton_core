@@ -29,12 +29,12 @@ def state_models_from_ts(TS_dict, initial_states_dict=None):
         # Create all nodes
         #------------------
         for node in state_model_dict['nodes']:
-            state_model.add_node(tuple([node]), label=set([str(node)]))
+            state_model.add_node(tuple([node]), label={str(node)})
         # If no initial states in arguments, use initial state from TS dict
         if not initial_states_dict:
-            state_model.graph['initial']=set([tuple([state_model_dict['initial']])])
+            state_model.graph['initial']={tuple([state_model_dict['initial']])}
         else:
-            state_model.graph['initial']=set([tuple([initial_states_dict[model_dim]])])
+            state_model.graph['initial']={tuple([initial_states_dict[model_dim]])}
         #----------------------------------
         # Connect previously created nodes
         #----------------------------------

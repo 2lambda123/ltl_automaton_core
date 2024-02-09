@@ -268,6 +268,6 @@ def dijkstra_revise(product, run_segment, broken_edge_index):
 
 
 def dijkstra_revise_once(product, run_segment, broken_edge_index):
-    for (bridge, cost) in dijkstra_targets(product, run_segment[broken_edge_index-1], set([run_segment[-1]])):
+    for (bridge, cost) in dijkstra_targets(product, run_segment[broken_edge_index-1], {run_segment[-1]}):
         new_run_segment = run_segment[0:(broken_edge_index-1)] + bridge
         return new_run_segment
