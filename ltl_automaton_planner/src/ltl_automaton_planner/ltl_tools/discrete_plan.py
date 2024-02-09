@@ -10,6 +10,8 @@ import time
 #optimal initial synthesis
 #===========================================
 def dijkstra_plan_networkX(product, gamma=10):
+    """"""
+    
     # requires a full construct of product automaton
     start = time.time()
     runs = {}
@@ -55,6 +57,8 @@ def dijkstra_plan_networkX(product, gamma=10):
 
 
 def dijkstra_plan_optimal(product, gamma=10, start_set=None):
+    """"""
+    
     start = time.time()
     #print('dijkstra plan started!)'
     runs = {}
@@ -89,6 +93,8 @@ def dijkstra_plan_optimal(product, gamma=10, start_set=None):
 
 
 def dijkstra_plan_bounded(product, time_limit=3, gamma=10):
+    """"""
+    
     start = time.time()
     rospy.logdebug('dijkstra plan started!')
     runs = {}
@@ -120,6 +126,8 @@ def dijkstra_plan_bounded(product, time_limit=3, gamma=10):
     
 
 def dijkstra_targets(product, prod_source, prod_targets):
+    """"""
+    
     # for product graph only, shortest path from source to a set of targets
     tovisit = set()
     visited = set()
@@ -151,6 +159,8 @@ def dijkstra_targets(product, prod_source, prod_targets):
 
 
 def dijkstra_loop(product, prod_accep):
+    """"""
+    
     #print('accept node check %s' %(str(prod_accep)))
     paths = {}
     costs = {}
@@ -169,6 +179,8 @@ def dijkstra_loop(product, prod_accep):
 
 
 def compute_path_from_pre(pre, target):
+    """"""
+    
     #print('pre: %s with size %i' %(pre, len(pre)))
     n = target
     path = [n]
@@ -191,6 +203,8 @@ def compute_path_from_pre(pre, target):
 #improve the current plan
 #===========================================
 def prod_states_given_history(product, trace):
+    """"""
+    
     if trace:
         S1 = set([(trace[0],p) for p in product.graph['buchi'].graph['initial']])
         for p in trace[1:-1]:
@@ -206,6 +220,8 @@ def prod_states_given_history(product, trace):
 
 
 def improve_plan_given_history(product, trace):
+    """"""
+    
     new_initial_set = prod_states_given_history(product, trace)
     if new_initial_set:
         new_run, time=dijkstra_plan_optimal(product, 10, new_initial_set)
@@ -218,6 +234,21 @@ def improve_plan_given_history(product, trace):
 #local revision, in case of system update
 #===========================================
 def validate_and_revise_after_ts_change(run, product, sense_info, com_info):
+    """Validates and revises the current plan prefix and suffix after a change in the transition system.
+    Parameters:
+        - run (object): The current run object.
+        - product (object): The product automaton.
+        - sense_info (object): Information about the current state of the robot.
+        - com_info (object): Information about the current state of the environment.
+    Returns:
+        - bool: True if the validation and revision was successful, False otherwise.
+    Processing Logic:
+        - Updates the product automaton after a change in the transition system.
+        - Checks for invalid edges in the current plan prefix and suffix.
+        - If invalid edges are found, revises the plan using Dijkstra's algorithm.
+        - If the revision is successful, updates the run object and outputs the new plan.
+        - If the revision fails, returns False."""
+    
     new_prefix = None
     new_suffix = None
     start = time.time()
@@ -257,6 +288,8 @@ def validate_and_revise_after_ts_change(run, product, sense_info, com_info):
 
 
 def dijkstra_revise(product, run_segment, broken_edge_index):
+    """"""
+    
     suf_segment = run_segment[(broken_edge_index+1):-1]
     for (bridge, cost) in dijkstra_targets(product, run_segment[broken_edge_index-1], suf_segment):
         run_segment_reversed = run_segment
@@ -268,6 +301,8 @@ def dijkstra_revise(product, run_segment, broken_edge_index):
 
 
 def dijkstra_revise_once(product, run_segment, broken_edge_index):
+    """"""
+    
     for (bridge, cost) in dijkstra_targets(product, run_segment[broken_edge_index-1], {run_segment[-1]}):
         new_run_segment = run_segment[0:(broken_edge_index-1)] + bridge
         return new_run_segment
