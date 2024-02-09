@@ -4,6 +4,8 @@ from networkx.classes.digraph import DiGraph
 
 # Import TS and action attributes from file
 def import_ts_from_file(transition_system_textfile):
+    """"""
+    
     try:
         # Get dictionary from yaml text file
         transition_system = yaml.safe_load(transition_system_textfile)
@@ -13,6 +15,8 @@ def import_ts_from_file(transition_system_textfile):
         raise ValueError("cannot load transition system from textfile")
 
 def state_models_from_ts(TS_dict, initial_states_dict=None):
+    """"""
+    
     state_models = []
 
     # If initial states are given as argument
@@ -57,6 +61,8 @@ def state_models_from_ts(TS_dict, initial_states_dict=None):
     return state_models
 
 def handle_ts_state_msg(ts_state_msg):
+    """"""
+    
     # Extract TS state from request message
     # If only 1-dimensional state, state is directly a string
     #   in this case create tuple from the state from message array without the function tuple() 
